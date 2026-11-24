@@ -39,7 +39,7 @@ scripts/
 
 - Страница — до 200 строк, компонент — до 300. 600 — потолок.
 - Длинная страница — это секции отдельными компонентами: `HeroSection.vue`, `PricesSection.vue`.
-- `scripts/check-architecture.mjs` проверяет: нет `$fetch` и `useFetch` в страницах и компонентах, нет запросов в `utils/`, нет файлов длиннее 600 строк. Подключение — `"check:arch": "node scripts/check-architecture.mjs"` и `"check": "pnpm build && pnpm check:arch"` в `package.json`. `pnpm check` — перед каждым коммитом.
+- `scripts/check-architecture.mjs` проверяет: нет `$fetch`, `useFetch`, `fetch` и `axios` в страницах и компонентах, нет запросов в `utils/`, нет файлов длиннее 600 строк. Подключение — `"check:arch": "node scripts/check-architecture.mjs"` и `"check": "pnpm build && pnpm check:arch"` в `package.json`. `pnpm check` — перед каждым коммитом.
 
 ## SEO
 

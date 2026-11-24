@@ -17,11 +17,14 @@
 //       studio, init, migrate status;
 //     - флаги --shadow-database-url, --accept-data-loss, --force-reset, --create-only;
 //     - подмену базы прямо в команде (DATABASE_URL=..., dotenv -e, --env-file);
-//     - migrate dev в нелокальную базу (список LOCAL_DB_HOSTS ниже);
+//     - migrate dev и seed в нелокальную базу (список LOCAL_DB_HOSTS ниже).
+//       Адрес смотрится как у Prisma: окружение, профиль шелла, потом .env;
 //     - ручной SQL: psql -c/-f, $executeRaw, DROP/TRUNCATE, DELETE FROM,
-//       pg_restore, dropdb;
+//       pg_restore, dropdb. Текст SQL — только если команда что-то запускает,
+//       сообщения коммитов не проверяются;
 //     - запись в prisma/migrations/;
-//     - то же самое, спрятанное в файл-скрипт (bash x.sh, node x.mjs).
+//     - то же самое, спрятанное в файл (bash x.sh, node x.mjs, ./deploy.sh)
+//       или в npm-скрипт (npm run deploy, pnpm deploy, yarn deploy).
 //   Write и Edit: правку файлов в prisma/migrations/.
 //   MCP к базе: всё, кроме чтения (SELECT, WITH … SELECT, EXPLAIN, SHOW).
 //
@@ -137,14 +140,24 @@ const BAD = [
   { rx: /(^|[^\w-])(psql|pg_restore|pg_dumpall|dropdb)([^\w-]|$)/, label: 'psql / pg_restore / dropdb', sqlOnly: true },
 ]
 
+// Текст для проверки на SQL: без сообщений коммита. Иначе `git commit -m "fix:
+// delete from cache"` блокируется как SQL, хотя ничего не выполняет.
+const scanText = cmd.replace(/(^|\s)(-m|--message)(\s+|=)("(?:[^"\\]|\\.)*"|'[^']*'|\S+)/g, ' ')
+
+// Программы, через которые текст в команде может уйти в базу как SQL.
+const EXECUTORS = /(^|[\s;&|(])(\S*\/)?(node|tsx|ts-node|bun|deno|python3?|psql|sqlite3|mysql|mariadb|prisma|npx|pnpm|yarn|npm|docker|ssh|sh|bash|zsh|dash)(\s|$)/
+
 // 1. Разрушающий SQL — в любом проекте, есть там Prisma или нет.
-if (/(^|[^\w-])psql(\s|$)/.test(cmd)) {
-  if (/(\s|^)(-c|-f|--command|--file)(\s|=)|<<|<\s*\S+|\|\s*(\S*\/)?psql\b/.test(cmd)) {
-    deny('ручной SQL через psql запрещён.', 'Посмотреть данные — через MCP только на чтение.')
+if (/(^|[^\w-])psql(\s|$)/.test(scanText)) {
+  if (/(\s|^)(-c|-f|--command|--file)(\s|=)|<<|<\s*\S+|\|\s*(\S*\/)?psql\b/.test(scanText)) {
+    deny('ручной SQL через psql запрещён.', 'Посмотреть данные — через MCP к базе, он только читает.')
   }
 }
 for (const b of BAD.filter((b) => b.sqlOnly)) {
-  if (b.rx.test(cmd)) {
+  // psql, pg_restore, dropdb — это сами программы, их ловим всегда. Текст SQL
+  // (DROP, DELETE FROM, $executeRaw) опасен, только если команда что-то запускает.
+  const isProgram = b.label.startsWith('psql')
+  if (b.rx.test(scanText) && (isProgram || EXECUTORS.test(scanText))) {
     deny(`запрещённая операция: ${b.label}.`, 'Ищешь такой текст в коде — используй поиск по файлам, а не Bash.')
   }
 }
@@ -153,26 +166,86 @@ for (const b of BAD.filter((b) => b.sqlOnly)) {
 const schemaDirs = findPrismaProjects(cwd, cmd)
 const prismaHere = /prisma/i.test(cmd) || schemaDirs.length > 0
 
-// 3. Команда запускает файл (bash x.sh, node x.mjs, npx tsx x.ts) — проверяем,
-//    что внутри. Спрятать команду в скрипт — это обход, а не решение.
-const RUNNERS = new Set(['bash', 'sh', 'zsh', 'dash', 'node', 'tsx', 'ts-node', 'deno', 'bun', 'python', 'python3', 'npx', 'pnpm', 'yarn'])
+// 3. Команда запускает файл или npm-скрипт — проверяем, что внутри.
+//    Спрятать команду в скрипт — это обход, а не решение.
+const rules = prismaHere ? BAD : BAD.filter((b) => b.sqlOnly)
+const RUNNERS = new Set(['bash', 'sh', 'zsh', 'dash', 'node', 'tsx', 'ts-node', 'deno', 'bun', 'python', 'python3', 'npx', 'pnpm', 'yarn', 'npm'])
 const EXTS = /\.(sh|bash|zsh|mjs|cjs|js|ts|mts|cts|py|sql)$/
+// Сборка и зависимости — не скрипты ассистента: в бандле Prisma свои строки.
+const SKIP_DIRS = /(^|\/)(dist|build|\.output|\.nuxt|node_modules)\//
+
+function scanFile(file, label) {
+  if (SKIP_DIRS.test(file)) return
+  let body = ''
+  try {
+    if (!fs.statSync(file).isFile()) return
+    body = fs.readFileSync(file, 'utf8').slice(0, 200_000)
+  } catch { return }
+  if (body.includes('\u0000')) return // бинарник, а не скрипт
+  const hit = rules.find((b) => b.rx.test(body))
+  if (hit) deny(`внутри запускаемого файла ${label} — ${hit.label}.`)
+}
+
+// 3а. Команда с раннером: все файлы-скрипты в ней. Это ловит и
+//     `cp src.mjs t.mjs && node t.mjs`: t.mjs ещё нет, но src.mjs уже читается.
 const tokens = tokenize(cmd)
 if (tokens.some((t) => RUNNERS.has(path.basename(t)))) {
-  const rules = prismaHere ? BAD : BAD.filter((b) => b.sqlOnly)
   for (const t of tokens) {
-    if (t.startsWith('-') || RUNNERS.has(path.basename(t))) continue
-    if (!EXTS.test(t) && !t.includes('/')) continue
-    // Сборка и зависимости — не скрипты ассистента: в бандле Prisma свои строки.
-    if (/(^|\/)(dist|build|\.output|\.nuxt|node_modules)\//.test(t)) continue
-    const p = path.isAbsolute(t) ? t : path.join(cwd, t)
-    let body = ''
-    try {
-      if (!fs.statSync(p).isFile()) continue
-      body = fs.readFileSync(p, 'utf8').slice(0, 200_000)
-    } catch { continue }
-    const hit = rules.find((b) => b.rx.test(body))
-    if (hit) deny(`внутри запускаемого файла ${t} — ${hit.label}.`)
+    if (t.startsWith('-') || !EXTS.test(t)) continue
+    scanFile(path.isAbsolute(t) ? t : path.join(cwd, t), t)
+  }
+}
+
+// 3б. По частям команды: запуск файла напрямую (`./deploy.sh`, `bin/migrate`)
+//     и npm-скрипты (`npm run deploy`, `pnpm deploy`, `yarn deploy`).
+const PM_BUILTINS = new Set(['install', 'i', 'add', 'remove', 'rm', 'uninstall', 'update', 'up', 'upgrade', 'exec', 'dlx', 'x', 'init', 'create', 'ci', 'list', 'ls', 'outdated', 'why', 'link', 'unlink', 'publish', 'pack', 'store', 'config', 'prune', 'audit', 'dedupe', 'import', 'rebuild', 'fetch', 'patch', 'setup', 'env', 'help', 'info', 'view', 'login', 'logout', 'whoami', 'version', 'cache', 'global', 'licenses', 'workspace', 'workspaces'])
+let curDir = cwd
+for (const seg of cmd.split(/&&|\|\||[;|\n]/)) {
+  const tk = tokenize(seg)
+  let i = 0
+  while (i < tk.length && (/^\w+=/.test(tk[i]) || ['sudo', 'env', 'time', 'exec', 'command', 'nohup'].includes(tk[i]))) i++
+  const prog = tk[i]
+  if (!prog) continue
+  if (prog === 'cd') { curDir = path.resolve(curDir, (tk[i + 1] || os.homedir()).replace(/^~(?=$|\/)/, os.homedir())); continue }
+  if (prog.includes('/') && !RUNNERS.has(path.basename(prog))) {
+    scanFile(path.isAbsolute(prog) ? prog : path.join(curDir, prog), prog)
+    continue
+  }
+  if (!['npm', 'pnpm', 'yarn', 'bun'].includes(prog)) continue
+  // Папка пакета: --dir, -C, --prefix, --cwd или текущая после cd.
+  let pkgDir = curDir
+  const rest = []
+  for (let j = i + 1; j < tk.length; j++) {
+    if (['--dir', '-C', '--prefix', '--cwd'].includes(tk[j])) { pkgDir = path.resolve(curDir, tk[++j] || '.'); continue }
+    if (/^--(dir|prefix|cwd)=/.test(tk[j])) { pkgDir = path.resolve(curDir, tk[j].split('=')[1]); continue }
+    if (tk[j].startsWith('-')) continue
+    rest.push(tk[j])
+  }
+  let name = rest[0]
+  if (name === 'run' || name === 'run-script') name = rest[1]
+  else if (prog === 'npm' && !['test', 't', 'start', 'stop', 'restart'].includes(name)) name = undefined
+  else if (PM_BUILTINS.has(name)) name = undefined
+  if (name === 't') name = 'test'
+  if (!name) continue
+  checkPackageScript(pkgDir, name, 0)
+}
+
+function checkPackageScript(dir, name, depth) {
+  let scripts = {}
+  try { scripts = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).scripts || {} } catch { return }
+  const body = scripts[name]
+  if (typeof body !== 'string') return
+  const hit = BAD.find((b) => b.rx.test(body))
+  if (hit) deny(`npm-скрипт «${name}» запускает: ${hit.label}.`)
+  if (/(^|[^\w-])(migrate\s+dev|db\s+seed)([^\w-]|$)/.test(body)) checkLocalDb()
+  // Скрипт зовёт файл или другой скрипт — смотрим и туда, на два уровня.
+  for (const t of tokenize(body)) {
+    if (EXTS.test(t) && !t.startsWith('-')) scanFile(path.join(dir, t), `${t} (из скрипта «${name}»)`)
+  }
+  if (depth < 2) {
+    for (const m of body.matchAll(/(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:.-]+)/g)) {
+      if (m[1] !== name && !PM_BUILTINS.has(m[1])) checkPackageScript(dir, m[1], depth + 1)
+    }
   }
 }
 
@@ -281,12 +354,27 @@ function findPrismaProjects(start, command) {
   return [...found]
 }
 
-// migrate dev — только в локальную базу. Адрес берём из .env рядом с prisma/
-// или из окружения. Не смогли узнать — запрещаем: ошибаемся в сторону запрета.
+// migrate dev и seed — только в локальную базу. Адрес ищем там же, где его
+// возьмёт Prisma, и в том же порядке: переменная окружения главнее .env.
+// Не смогли узнать — запрещаем: ошибаемся в сторону запрета.
 function checkLocalDb() {
   if (schemaDirs.length === 0) {
     deny('не нашёл prisma/schema.prisma, поэтому не могу проверить, в какую базу уйдёт миграция.', 'Запусти migrate dev из папки сервиса со схемой.')
   }
+  const hostOf = (u) => { try { return new URL(u).hostname } catch { return '' } }
+  const isLocal = (u) => LOCAL_DB_HOSTS.has(hostOf(u))
+  const readVar = (file, name) => {
+    try {
+      const txt = fs.readFileSync(file, 'utf8')
+      const m = txt.match(new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=\\s*["']?([^"'\\n#]+)`, 'm'))
+      return m ? m[1].trim() : ''
+    } catch { return '' }
+  }
+  const remote = (where, u) => deny(
+    `${where}: команда нацелена не на локальную базу (хост «${hostOf(u) || 'не разобрал'}»).`,
+    'Разработка идёт в своей базе: Postgres в Docker на этом компьютере. Боевую схему обновляет деплой.',
+  )
+
   for (const dir of schemaDirs) {
     let varName = 'DATABASE_URL'
     try {
@@ -294,25 +382,27 @@ function checkLocalDb() {
       const m = schema.match(/url\s*=\s*env\(\s*"(\w+)"\s*\)/)
       if (m) varName = m[1]
     } catch {}
-    let url = ''
-    for (const f of ['.env', '.env.local', '.env.development']) {
-      try {
-        const txt = fs.readFileSync(path.join(dir, f), 'utf8')
-        const m = txt.match(new RegExp(`^\\s*(?:export\\s+)?${varName}\\s*=\\s*["']?([^"'\\n#]+)`, 'm'))
-        if (m) { url = m[1].trim(); break }
-      } catch {}
+
+    // 1) Окружение. Prisma берёт его раньше .env: если здесь прод, .env не спасёт.
+    const envUrl = process.env[varName] || ''
+    if (envUrl && !isLocal(envUrl)) remote(`${varName} в окружении`, envUrl)
+
+    // 2) Профиль шелла. Команды Bash запускаются с ним, а хук его может не видеть.
+    for (const f of ['.zshrc', '.zprofile', '.zshenv', '.bashrc', '.bash_profile', '.profile']) {
+      const u = readVar(path.join(os.homedir(), f), varName)
+      if (u && !isLocal(u)) remote(`${varName} в ~/${f}`, u)
     }
-    if (!url) url = process.env[varName] || ''
-    if (!url) {
+
+    // 3) Файлы .env — рядом с package.json и рядом со схемой.
+    let fileUrl = ''
+    for (const f of ['.env', 'prisma/.env', '.env.local', '.env.development']) {
+      fileUrl = readVar(path.join(dir, f), varName)
+      if (fileUrl) break
+    }
+    if (fileUrl && !isLocal(fileUrl)) remote(`${varName} в .env`, fileUrl)
+
+    if (!envUrl && !fileUrl) {
       deny(`не нашёл ${varName} для ${dir}, поэтому не могу проверить, в какую базу уйдёт миграция.`, `Положи ${varName} с адресом локальной базы в ${path.join(dir, '.env')}.`)
-    }
-    let host = ''
-    try { host = new URL(url).hostname } catch {}
-    if (!LOCAL_DB_HOSTS.has(host)) {
-      deny(
-        `команда нацелена не на локальную базу (хост «${host || 'не разобрал'}»).`,
-        'Разработка идёт в своей базе: Postgres в Docker на этом компьютере. Боевую схему обновляет деплой.',
-      )
     }
   }
 }

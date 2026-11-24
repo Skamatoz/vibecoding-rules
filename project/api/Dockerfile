@@ -1,5 +1,7 @@
-# API: Hono + Prisma. Собираем в одном этапе, в образ запуска берём только
-# зависимости для работы, схему и собранный dist.
+# API: Hono + Prisma. Два этапа: первый собирает код, во второй — образ запуска —
+# попадают только рабочие зависимости, схема и собранный dist.
+# Prisma вызывается из node_modules/.bin, а не через npx: npx при отсутствии
+# пакета молча скачал бы последнюю версию из интернета.
 
 # ── Сборка ───────────────────────────────────────────────────────────────────
 FROM node:22-alpine AS build
@@ -19,7 +21,7 @@ RUN npm install -g pnpm@11.6.0 --registry=https://registry.npmmirror.com/ \
     && pnpm install --frozen-lockfile
 
 COPY . .
-RUN npx prisma generate && pnpm run build
+RUN node_modules/.bin/prisma generate && pnpm run build
 
 # ── Запуск ───────────────────────────────────────────────────────────────────
 FROM node:22-alpine
@@ -35,8 +37,12 @@ COPY .npmrc package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN npm install -g pnpm@11.6.0 --registry=https://registry.npmmirror.com/ \
     && pnpm install --frozen-lockfile --prod
 
+# Без prisma в dependencies миграции при старте не запустятся — падаем здесь, при сборке, а не на проде.
+RUN test -x node_modules/.bin/prisma \
+    || (echo "prisma должна быть в dependencies, а не в devDependencies" && exit 1)
+
 COPY prisma ./prisma
-RUN npx prisma generate
+RUN node_modules/.bin/prisma generate
 COPY --from=build /app/dist ./dist
 
 ENV NODE_ENV=production
@@ -44,4 +50,4 @@ USER node
 
 EXPOSE 4000
 # Миграции применяются при каждом старте: новые накатятся, применённые пропустятся.
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
+CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy && node dist/index.js"]

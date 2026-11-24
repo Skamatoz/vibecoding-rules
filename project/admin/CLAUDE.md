@@ -61,10 +61,12 @@ scripts/
 
 ## Сторож
 
-`scripts/check-architecture.mjs` — скрипт, который читает `app/` и проверяет:
-- в страницах, компонентах и layouts нет `$fetch` и `useFetch` — в API ходят composables;
-- в `utils/` нет запросов и composables;
+`scripts/check-architecture.mjs` — скрипт, который читает `app/` (в старом Nuxt 3 — корень, в Vite — `src/`) и проверяет три правила:
+- в страницах, компонентах и layouts нет `$fetch`, `useFetch`, `fetch` и `axios` — в API ходят composables;
+- в `utils/` нет запросов, composables и импортов из `components/` и `composables/` (импорт типа можно);
 - нет файлов длиннее 600 строк. Страница длиннее 200 строк и компонент длиннее 300 — предупреждение.
+
+Всё остальное из этого файла — роли компонентов, состояния, «фронт не решает» — сторож не видит: это держится на тебе.
 
 Подключение — в `package.json`:
 
