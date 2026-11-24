@@ -2,7 +2,7 @@
 /**
  * Сторож устройства фронта на Nuxt: `pnpm check:arch` (входит в `pnpm check`).
  *
- * Правила (AGENTS.md, раздел 4):
+ * Правила (CLAUDE.md этого сервиса):
  *  · в API ходят только composables через useApi: в pages/ и components/
  *    нет $fetch, useFetch, useLazyFetch;
  *  · utils/ — чистые функции: без composables, запросов и импортов из
@@ -73,7 +73,7 @@ for (const w of warnings) console.log(`⚠️  ${w}`)
 for (const e of errors) console.log(`✖ ${e}`)
 console.log(
   errors.length
-    ? `\nустройство фронта: нарушений ${errors.length} — исправить (правила — AGENTS.md, раздел 4)`
+    ? `\nустройство фронта: нарушений ${errors.length} — исправить (правила — CLAUDE.md этого сервиса)`
     : `устройство фронта: в порядке (${files.length} файлов${warnings.length ? `, предупреждений ${warnings.length}` : ''})`,
 )
 process.exit(errors.length ? 1 : 0)

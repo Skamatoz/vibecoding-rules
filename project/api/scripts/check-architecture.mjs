@@ -2,7 +2,7 @@
 /**
  * Сторож устройства API: `pnpm check:arch` (входит в `pnpm check`).
  *
- * Слои — routes → services → lib (AGENTS.md, раздел 4):
+ * Слои — routes → services → lib (CLAUDE.md этого сервиса):
  *  · роут — только схема, права и вызов сервиса: в базу не ходит;
  *  · lib — инфраструктура: о сервисах, роутах и воркерах не знает;
  *  · сервисы и воркеры не зависят от роутов.
@@ -115,7 +115,7 @@ for (const w of warnings) console.log(`⚠️  ${w}`)
 for (const e of errors) console.log(`✖ ${e}`)
 console.log(
   errors.length
-    ? `\nустройство API: нарушений ${errors.length} — исправить (правила — AGENTS.md, раздел 4)`
+    ? `\nустройство API: нарушений ${errors.length} — исправить (правила — CLAUDE.md этого сервиса)`
     : `устройство API: в порядке (${files.length} файлов${warnings.length ? `, предупреждений ${warnings.length}` : ''})`,
 )
 process.exit(errors.length ? 1 : 0)
