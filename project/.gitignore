@@ -1,0 +1,14 @@
+# Зависимости и сборка
+node_modules/
+dist/
+.nuxt/
+.output/
+
+# Секреты: .env с ключами никогда не попадает в git. Пример переменных — .env.example
+.env
+.env.*
+!.env.example
+
+# Мусор
+*.log
+.DS_Store

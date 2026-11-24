@@ -30,9 +30,10 @@ const RULES = [
   ['workers/', ['routes/'], 'воркер не зависит от HTTP-слоя'],
 ]
 
+// Свежая заготовка: кода ещё нет — проверять нечего, первый коммит не блокируем.
 if (!fs.existsSync(SRC)) {
-  console.log(`✖ нет папки ${SRC}`)
-  process.exit(1)
+  console.log('устройство API: папки src/ ещё нет — проверять нечего')
+  process.exit(0)
 }
 
 const files = []

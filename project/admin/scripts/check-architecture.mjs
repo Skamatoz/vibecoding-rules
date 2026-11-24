@@ -23,9 +23,10 @@ const WARN_PAGE = 200
 const WARN_LINES = 300
 const MAX_LINES = 600
 
+// Свежая заготовка: кода ещё нет — проверять нечего, первый коммит не блокируем.
 if (!fs.existsSync(APP)) {
-  console.log(`✖ нет папки ${APP}`)
-  process.exit(1)
+  console.log('устройство фронта: папки app/ ещё нет — проверять нечего')
+  process.exit(0)
 }
 
 const files = []

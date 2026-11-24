@@ -1,5 +1,6 @@
 # pnpm не запускает install-скрипты зависимостей без разрешения.
 # Prisma скачивает движки именно в них: без этого списка сборка упадёт на prisma generate.
+# Ключ allowBuilds — из pnpm 11 (Dockerfile ставит pnpm 11.6.0). В pnpm 10 он назывался onlyBuiltDependencies.
 allowBuilds:
   esbuild: true
   prisma: true

@@ -1,0 +1,25 @@
+#!/bin/sh
+# Git-хук: перед коммитом запускает сторожа (scripts/check-architecture.mjs)
+# в каждом сервисе, где есть изменения. Нарушение — коммит не проходит.
+#
+# Включается один раз в проекте:
+#   git config core.hooksPath .githooks
+#
+# Сборку (pnpm build) хук не запускает — она долгая. Её запускает pnpm check.
+
+status=0
+for guard in */scripts/check-architecture.mjs; do
+  [ -f "$guard" ] || continue
+  dir=${guard%%/*}
+  if git diff --cached --name-only --diff-filter=ACMR -- "$dir" | grep -q .; then
+    echo "сторож: $dir"
+    node "$guard" || status=1
+  fi
+done
+
+if [ "$status" -ne 0 ]; then
+  echo ""
+  echo "Коммит остановлен: код разложен не по правилам (CLAUDE.md сервиса)."
+  echo "Исправь код и закоммить снова. Правила сторожа не ослабляй."
+fi
+exit $status

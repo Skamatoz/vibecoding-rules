@@ -162,12 +162,23 @@ ssh root@<IP> 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get inst
 | CORS | заголовки ответа | свои адреса, нигде нет `*` с credentials |
 | Секреты не в браузере | исходник страницы, `window.__NUXT__.config` | нет ключей |
 | Source map | `<сайт>/_nuxt/<файл>.js.map` | 404 |
-| История git | `git log --all -p \| grep -i -E "password\|secret\|token\|postgres://"` | пусто |
+| История git | команда ниже | в найденном нет настоящих ключей и паролей |
 | Лимит тела | POST на 3 МБ, в том числе `Transfer-Encoding: chunked` | 413 |
 | Лимит входа | 20 неверных паролей подряд | 429 |
-| Заголовки | `curl -sI https://<домен>/ \| grep -i -E "strict-transport\|x-frame\|content-security\|x-powered"` | HSTS есть, у админки DENY, X-Powered-By нет |
+| Заголовки | команда ниже | HSTS есть, у админки DENY, X-Powered-By нет |
 | Кэш SSR | 3000 запросов `/?x=N` и замер памяти | память не растёт без предела |
 | Healthcheck | остановить базу и запросить `/health` | не `ok` |
+
+Команды для таблицы. Внутри таблицы их не держим: в сыром файле знак `|` там приходится экранировать, и скопированная команда перестаёт работать.
+
+```
+# История git: нет ли ключей и паролей. Слова token и password встретятся и в обычном коде —
+# найденное просмотри глазами, настоящих значений быть не должно.
+git log --all -p | grep -i -E "password|secret|token|postgres://"
+
+# Заголовки безопасности
+curl -sI https://<домен>/ | grep -i -E "strict-transport|x-frame|content-security|x-powered"
+```
 
 ## 12. Видео и стримы
 

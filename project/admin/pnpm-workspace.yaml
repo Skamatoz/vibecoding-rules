@@ -1,4 +1,5 @@
 # pnpm не запускает install-скрипты зависимостей без разрешения. Nuxt они нужны для сборки.
+# Ключ allowBuilds — из pnpm 11 (Dockerfile ставит pnpm 11.6.0). В pnpm 10 он назывался onlyBuiltDependencies.
 allowBuilds:
   esbuild: true
   '@parcel/watcher': true
