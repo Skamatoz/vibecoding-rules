@@ -1,0 +1,5 @@
+# pnpm не запускает install-скрипты зависимостей без разрешения. Nuxt они нужны для сборки.
+allowBuilds:
+  esbuild: true
+  '@parcel/watcher': true
+  vue-demi: false

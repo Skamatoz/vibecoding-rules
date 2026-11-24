@@ -1,0 +1,20 @@
+# Локальная база для разработки — только на твоём компьютере, не на сервере.
+# На сервере базу поднимает Dokploy.
+#   запуск:     docker compose up -d db
+#   остановка:  docker compose stop db
+# Данные лежат в томе pgdata и переживают перезапуск.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: app
+    ports:
+      # Только с этого компьютера: без 127.0.0.1 база видна всей сети, например кафе.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
