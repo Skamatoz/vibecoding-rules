@@ -2,9 +2,9 @@
 /**
  * Сторож устройства фронта: `pnpm check:arch` (входит в `pnpm check` и git-хук перед коммитом).
  *
- * Что проверяет (правила — CLAUDE.md этого сервиса):
+ * Что проверяет (правила — AGENTS.md этого сервиса):
  *  · в API ходят только composables через useApi: в pages/, components/ и layouts/
- *    нет $fetch, useFetch, useLazyFetch, fetch, axios;
+ *    нет $fetch, useFetch, useLazyFetch, fetch, axios и прямого useApi();
  *  · utils/ — чистые функции: без composables, запросов и импортов из
  *    components/ и composables/ (`import type` можно);
  *  · размер: страница — до 200 строк, остальное — до 300 (предупреждение);
@@ -60,7 +60,7 @@ for (const file of files) {
   const code = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/<!--[\s\S]*?-->/g, '').replace(/(^|[^:'"])\/\/.*$/gm, '$1')
 
   if (/^(pages|components|layouts)\//.test(from)) {
-    const m = code.match(/\$fetch\s*[(<]|\buse(Lazy)?Fetch\s*[(<]|(^|[^$\w.])fetch\s*\(|\baxios\b/)
+    const m = code.match(/\$fetch\s*[(<]|\buse(Lazy)?Fetch\s*[(<]|(^|[^$\w.])fetch\s*\(|\baxios\b|\buseApi\s*\(/)
     if (m) errors.push(`${from}: ${m[0].trim().replace(/[(<]$/, '')} — в API ходит composable через useApi, не страница и не компонент`)
   }
 
@@ -84,7 +84,7 @@ for (const w of warnings) console.log(`⚠️  ${w}`)
 for (const e of errors) console.log(`✖ ${e}`)
 console.log(
   errors.length
-    ? `\nустройство фронта: нарушений ${errors.length} — исправить (правила — CLAUDE.md этого сервиса)`
+    ? `\nустройство фронта: нарушений ${errors.length} — исправить (правила — AGENTS.md этого сервиса)`
     : `устройство фронта: в порядке (${files.length} файлов${warnings.length ? `, предупреждений ${warnings.length}` : ''})`,
 )
 process.exit(errors.length ? 1 : 0)

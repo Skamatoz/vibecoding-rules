@@ -147,6 +147,50 @@ const scanText = cmd.replace(/(^|\s)(-m|--message)(\s+|=)("(?:[^"\\]|\\.)*"|'[^'
 // Программы, через которые текст в команде может уйти в базу как SQL.
 const EXECUTORS = /(^|[\s;&|(])(\S*\/)?(node|tsx|ts-node|bun|deno|python3?|psql|sqlite3|mysql|mariadb|prisma|npx|pnpm|yarn|npm|docker|ssh|sh|bash|zsh|dash)(\s|$)/
 
+// 0а. Обход проверок перед коммитом: git-хук запускает сторожа и ищет секреты.
+for (const seg of cmd.split(/&&|\|\||[;|\n]/)) {
+  const tk = tokenize(seg)
+  const gi = tk.indexOf('git')
+  if (gi === -1) continue
+  let j = gi + 1
+  while (j < tk.length && tk[j].startsWith('-')) {
+    if (tk[j] === '-c' && /^core\.hookspath=/i.test(tk[j + 1] || '')) {
+      deny('git с подменой core.hooksPath — это обход проверок перед коммитом.')
+    }
+    j += ['-c', '-C', '--git-dir', '--work-tree'].includes(tk[j]) ? 2 : 1
+  }
+  const sub = tk[j]
+  const rest = tk.slice(j + 1)
+  if (['commit', 'push', 'merge', 'rebase', 'am', 'cherry-pick', 'revert', 'pull'].includes(sub)) {
+    const VALUE_FLAGS = new Set(['-m', '--message', '-F', '--file', '-C', '-c', '--author', '--date', '-t', '--template'])
+    for (let k = 0; k < rest.length; k++) {
+      if (VALUE_FLAGS.has(rest[k])) { k++; continue }
+      if (rest[k] === '--no-verify' || (sub === 'commit' && /^-[a-zA-Z]*n[a-zA-Z]*$/.test(rest[k]))) {
+        deny(`git ${sub} в обход проверок (--no-verify).`, 'Проверка не прошла — почини причину или скажи владельцу, что мешает.')
+      }
+    }
+  }
+  if (sub === 'config') {
+    const k = rest.findIndex((t) => /^core\.hookspath$/i.test(t))
+    if (k !== -1) {
+      const unset = rest.some((t) => t === '--unset' || t === '--unset-all')
+      const val = rest[k + 1]
+      if (unset || (val !== undefined && val !== '.githooks')) {
+        deny('смена core.hooksPath отключает проверки перед коммитом.', 'Разрешено только `git config core.hooksPath .githooks`.')
+      }
+    }
+  }
+}
+
+// 0б. SSH-туннель к порту базы: боевая база на localhost остаётся боевой.
+if (/(^|[\s;&|(])(ssh|autossh)\s/.test(cmd)) {
+  for (const m of cmd.matchAll(/\s-[a-zA-Z]*L\s*(\S+)/g)) {
+    if (/(^|:)(5432|5433|6432)(:|$)/.test(m[1])) {
+      deny('SSH-туннель к базе.', 'Боевая база через туннель на localhost — всё равно боевая. Смотреть данные — через MCP к базе, он только читает.')
+    }
+  }
+}
+
 // 1. Разрушающий SQL — в любом проекте, есть там Prisma или нет.
 if (/(^|[^\w-])psql(\s|$)/.test(scanText)) {
   if (/(\s|^)(-c|-f|--command|--file)(\s|=)|<<|<\s*\S+|\|\s*(\S*\/)?psql\b/.test(scanText)) {
@@ -354,15 +398,17 @@ function findPrismaProjects(start, command) {
   return [...found]
 }
 
-// migrate dev и seed — только в локальную базу. Адрес ищем там же, где его
-// возьмёт Prisma, и в том же порядке: переменная окружения главнее .env.
+// migrate dev и seed — только в локальную базу. Проверяются все адреса, которые
+// возьмёт Prisma: url, directUrl и shadowDatabaseUrl (shadow-базу Prisma затирает
+// при каждом migrate dev). Источники — как у Prisma: окружение главнее .env.
+// Есть docker-compose.yml — адрес сверяется с ним: хост, порт и имя базы.
+// Туннель к боевой базе на localhost:5433 иначе сошёл бы за локальную.
 // Не смогли узнать — запрещаем: ошибаемся в сторону запрета.
 function checkLocalDb() {
   if (schemaDirs.length === 0) {
     deny('не нашёл prisma/schema.prisma, поэтому не могу проверить, в какую базу уйдёт миграция.', 'Запусти migrate dev из папки сервиса со схемой.')
   }
-  const hostOf = (u) => { try { return new URL(u).hostname } catch { return '' } }
-  const isLocal = (u) => LOCAL_DB_HOSTS.has(hostOf(u))
+  const parse = (u) => { try { return new URL(u) } catch { return null } }
   const readVar = (file, name) => {
     try {
       const txt = fs.readFileSync(file, 'utf8')
@@ -370,39 +416,96 @@ function checkLocalDb() {
       return m ? m[1].trim() : ''
     } catch { return '' }
   }
-  const remote = (where, u) => deny(
-    `${where}: команда нацелена не на локальную базу (хост «${hostOf(u) || 'не разобрал'}»).`,
-    'Разработка идёт в своей базе: Postgres в Docker на этом компьютере. Боевую схему обновляет деплой.',
-  )
 
   for (const dir of schemaDirs) {
-    let varName = 'DATABASE_URL'
+    const compose = findCompose(dir)
+    const why = (u) => {
+      const p = parse(u)
+      if (!p) return 'адрес не разобрать'
+      if (!LOCAL_DB_HOSTS.has(p.hostname)) return `хост «${p.hostname}» не локальный`
+      if (!compose) return ''
+      const inDocker = ['db', 'postgres'].includes(p.hostname)
+      const port = p.port || '5432'
+      const wantPort = inDocker ? '5432' : compose.port
+      if (port !== wantPort) return `порт ${port}, а локальная база из docker-compose.yml — на ${wantPort}`
+      const db = decodeURIComponent(p.pathname.replace(/^\//, ''))
+      if (compose.db && db !== compose.db) return `база «${db}», а в docker-compose.yml — «${compose.db}»`
+      return ''
+    }
+    const check = (where, u) => {
+      const reason = why(u)
+      if (reason) {
+        deny(
+          `${where}: команда нацелена не на локальную базу (${reason}).`,
+          'Разработка идёт в своей базе: Postgres из docker-compose.yml на этом компьютере. Боевую схему обновляет деплой.',
+        )
+      }
+    }
+
+    // Какие адреса читает Prisma: из блока datasource схемы и из prisma.config.ts.
+    const vars = []
+    const literals = []
     try {
       const schema = fs.readFileSync(path.join(dir, 'prisma', 'schema.prisma'), 'utf8')
-      const m = schema.match(/url\s*=\s*env\(\s*"(\w+)"\s*\)/)
-      if (m) varName = m[1]
+      const block = (schema.match(/datasource\s+\w+\s*\{([\s\S]*?)\}/) || [])[1] || ''
+      for (const m of block.matchAll(/^\s*(url|directUrl|shadowDatabaseUrl)\s*=\s*(?:env\(\s*"(\w+)"\s*\)|"([^"]+)")/gm)) {
+        if (m[2]) vars.push({ field: m[1], name: m[2] })
+        else literals.push({ field: m[1], value: m[3] })
+      }
     } catch {}
+    try {
+      const cfg = fs.readFileSync(path.join(dir, 'prisma.config.ts'), 'utf8')
+      for (const m of cfg.matchAll(/env\(\s*['"](\w+)['"]\s*\)|process\.env\.(\w+)|process\.env\[\s*['"](\w+)['"]\s*\]/g)) {
+        vars.push({ field: 'prisma.config.ts', name: m[1] || m[2] || m[3] })
+      }
+      for (const m of cfg.matchAll(/['"`](postgres(?:ql)?:\/\/[^'"`]+)['"`]/g)) literals.push({ field: 'prisma.config.ts', value: m[1] })
+    } catch {}
+    if (vars.length === 0 && literals.length === 0) vars.push({ field: 'url', name: 'DATABASE_URL' })
 
-    // 1) Окружение. Prisma берёт его раньше .env: если здесь прод, .env не спасёт.
-    const envUrl = process.env[varName] || ''
-    if (envUrl && !isLocal(envUrl)) remote(`${varName} в окружении`, envUrl)
+    for (const l of literals) check(`${l.field} прямо в схеме`, l.value)
 
-    // 2) Профиль шелла. Команды Bash запускаются с ним, а хук его может не видеть.
-    for (const f of ['.zshrc', '.zprofile', '.zshenv', '.bashrc', '.bash_profile', '.profile']) {
-      const u = readVar(path.join(os.homedir(), f), varName)
-      if (u && !isLocal(u)) remote(`${varName} в ~/${f}`, u)
-    }
+    for (const v of vars) {
+      // 1) Окружение. Prisma берёт его раньше .env: если здесь прод, .env не спасёт.
+      const envUrl = process.env[v.name] || ''
+      if (envUrl) check(`${v.name} (${v.field}) в окружении`, envUrl)
 
-    // 3) Файлы .env — рядом с package.json и рядом со схемой.
-    let fileUrl = ''
-    for (const f of ['.env', 'prisma/.env', '.env.local', '.env.development']) {
-      fileUrl = readVar(path.join(dir, f), varName)
-      if (fileUrl) break
-    }
-    if (fileUrl && !isLocal(fileUrl)) remote(`${varName} в .env`, fileUrl)
+      // 2) Профиль шелла. Команды Bash запускаются с ним, а хук его может не видеть.
+      for (const f of ['.zshrc', '.zprofile', '.zshenv', '.bashrc', '.bash_profile', '.profile']) {
+        const u = readVar(path.join(os.homedir(), f), v.name)
+        if (u) check(`${v.name} в ~/${f}`, u)
+      }
 
-    if (!envUrl && !fileUrl) {
-      deny(`не нашёл ${varName} для ${dir}, поэтому не могу проверить, в какую базу уйдёт миграция.`, `Положи ${varName} с адресом локальной базы в ${path.join(dir, '.env')}.`)
+      // 3) Файлы .env — рядом с package.json и рядом со схемой.
+      let fileUrl = ''
+      for (const f of ['.env', 'prisma/.env', '.env.local', '.env.development']) {
+        fileUrl = readVar(path.join(dir, f), v.name)
+        if (fileUrl) break
+      }
+      if (fileUrl) check(`${v.name} (${v.field}) в .env`, fileUrl)
+
+      if (!envUrl && !fileUrl && v.field === 'url') {
+        deny(`не нашёл ${v.name} для ${dir}, поэтому не могу проверить, в какую базу уйдёт миграция.`, `Положи ${v.name} с адресом локальной базы в ${path.join(dir, '.env')}.`)
+      }
     }
   }
+}
+
+// docker-compose.yml с локальной базой: от папки сервиса вверх на четыре уровня.
+// Возвращает порт на компьютере и имя базы, или null, если файла нет.
+function findCompose(start) {
+  let d = start
+  for (let i = 0; i < 5; i++) {
+    for (const f of ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']) {
+      let txt = ''
+      try { txt = fs.readFileSync(path.join(d, f), 'utf8') } catch { continue }
+      if (!/image:\s*['"]?postgres/i.test(txt)) continue
+      const port = (txt.match(/['"]?(?:[\d.]+:)?(\d+):5432['"]?/) || [])[1] || '5432'
+      const db = (txt.match(/POSTGRES_DB\s*[:=]\s*['"]?([\w-]+)/) || [])[1] || (txt.match(/POSTGRES_USER\s*[:=]\s*['"]?([\w-]+)/) || [])[1] || ''
+      return { port, db }
+    }
+    const parent = path.dirname(d)
+    if (parent === d) break
+    d = parent
+  }
+  return null
 }

@@ -1,0 +1,32 @@
+# Страховка git-хука: те же сторожа на каждый пуш и пулреквест.
+# На другом компьютере git-хук может быть не включён — здесь проверка пройдёт всё равно.
+# Выкладку не делает: её делает Dokploy.
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Сторожа устройства кода
+        run: |
+          status=0
+          for guard in */scripts/check-architecture.mjs; do
+            [ -f "$guard" ] || continue
+            echo "== ${guard%%/*}"
+            node "$guard" || status=1
+          done
+          exit $status
+      - name: Нет .env в репозитории
+        run: |
+          if git ls-files | grep -E '(^|/)\.env(\.[^/]+)?$' | grep -v -E '\.env\.example$'; then
+            echo "В репозитории лежит .env — убери его и перевыпусти ключи из него."
+            exit 1
+          fi

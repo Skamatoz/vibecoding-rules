@@ -2,7 +2,7 @@
 /**
  * Сторож устройства API: `pnpm check:arch` (входит в `pnpm check` и git-хук перед коммитом).
  *
- * Что проверяет (правила — CLAUDE.md этого сервиса):
+ * Что проверяет (правила — AGENTS.md этого сервиса):
  *  · роут не импортирует prisma — ни `lib/prisma`, ни `lib/db`, ни `@prisma/client`:
  *    в базу ходит только сервис;
  *  · роут не ходит во внешние API (`fetch`, `axios`) — это делает сервис через lib;
@@ -156,7 +156,7 @@ for (const w of warnings) console.log(`⚠️  ${w}`)
 for (const e of errors) console.log(`✖ ${e}`)
 console.log(
   errors.length
-    ? `\nустройство API: нарушений ${errors.length} — исправить (правила — CLAUDE.md этого сервиса)`
+    ? `\nустройство API: нарушений ${errors.length} — исправить (правила — AGENTS.md этого сервиса)`
     : `устройство API: в порядке (${files.length} файлов${warnings.length ? `, предупреждений ${warnings.length}` : ''})`,
 )
 process.exit(errors.length ? 1 : 0)

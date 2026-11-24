@@ -1,6 +1,10 @@
 #!/bin/sh
-# Git-хук: перед коммитом запускает сторожа (scripts/check-architecture.mjs)
-# в каждом сервисе, где есть изменения. Нарушение — коммит не проходит.
+# Git-хук перед коммитом:
+#   1) не даёт закоммитить секреты: .env, приватные ключи, адреса баз с паролем,
+#      токены Telegram-ботов, ключи OpenAI, Anthropic и AWS;
+#   2) запускает сторожа (scripts/check-architecture.mjs) в каждом сервисе,
+#      где есть изменения.
+# Нарушение — коммит не проходит. Обходить его (--no-verify) нельзя.
 #
 # Включается один раз в проекте:
 #   git config core.hooksPath .githooks
@@ -8,10 +12,44 @@
 # Сборку (pnpm build) хук не запускает — она долгая. Её запускает pnpm check.
 
 status=0
+
+# ── 1. Секреты ───────────────────────────────────────────────────────────────
+# Найденное не печатаем — только файл: иначе секрет окажется в выводе и в чате.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+envfiles=$(printf '%s\n' "$staged" | grep -E '(^|/)\.env(\.[^/]+)?$' | grep -v -E '\.env\.example$')
+if [ -n "$envfiles" ]; then
+  echo "секреты: в коммит попал файл с переменными окружения:"
+  printf '%s\n' "$envfiles" | sed 's/^/  /'
+  echo "  Убери: git restore --staged <файл>. Секреты живут в env Dokploy, в git — только .env.example."
+  status=1
+fi
+
+secret_files=""
+for f in $staged; do
+  [ -f "$f" ] || continue
+  hit=$(git diff --cached -U0 -- "$f" | grep -E '^\+' | grep -v -E '^\+\+\+ ' | grep -E \
+    -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
+    -e 'postgres(ql)?://[^:/@[:space:]]+:[^@/[:space:]]+@' \
+    -e '[0-9]{8,10}:AA[A-Za-z0-9_-]{33}' \
+    -e 'sk-(proj-|ant-)?[A-Za-z0-9_-]{20,}' \
+    -e 'AKIA[0-9A-Z]{16}' \
+    | grep -v -E '@(localhost|127\.0\.0\.1|db|postgres|host\.docker\.internal)[:/]')
+  [ -n "$hit" ] && secret_files="$secret_files  $f
+"
+done
+if [ -n "$secret_files" ]; then
+  echo "секреты: в добавленных строках похоже на ключ, токен или пароль:"
+  printf '%s' "$secret_files"
+  echo "  Убери секрет из файла. Если он уже где-то засветился — перевыпусти."
+  status=1
+fi
+
+# ── 2. Сторожа устройства кода ──────────────────────────────────────────────
 for guard in */scripts/check-architecture.mjs; do
   [ -f "$guard" ] || continue
   dir=${guard%%/*}
-  if git diff --cached --name-only --diff-filter=ACMR -- "$dir" | grep -q .; then
+  if printf '%s\n' "$staged" | grep -q "^$dir/"; then
     echo "сторож: $dir"
     node "$guard" || status=1
   fi
@@ -19,7 +57,7 @@ done
 
 if [ "$status" -ne 0 ]; then
   echo ""
-  echo "Коммит остановлен: код разложен не по правилам (CLAUDE.md сервиса)."
-  echo "Исправь код и закоммить снова. Правила сторожа не ослабляй."
+  echo "Коммит остановлен. Исправь причину и закоммить снова."
+  echo "Правила устройства кода — AGENTS.md сервиса. Проверки не ослабляй и не обходи."
 fi
 exit $status

@@ -4,3 +4,7 @@ allowBuilds:
   esbuild: true
   '@parcel/watcher': true
   vue-demi: false
+
+# Версии пакетов моложе суток не ставим: заражённые выпуски обычно ловят и снимают
+# в первые часы. Значение — в минутах. Не убирать.
+minimumReleaseAge: 1440

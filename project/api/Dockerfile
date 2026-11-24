@@ -4,7 +4,7 @@
 # пакета молча скачал бы последнюю версию из интернета.
 
 # ── Сборка ───────────────────────────────────────────────────────────────────
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
@@ -24,7 +24,7 @@ COPY . .
 RUN node_modules/.bin/prisma generate && pnpm run build
 
 # ── Запуск ───────────────────────────────────────────────────────────────────
-FROM node:22-alpine
+FROM node:24-alpine
 
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
@@ -49,5 +49,12 @@ ENV NODE_ENV=production
 USER node
 
 EXPOSE 4000
+
+# Swarm считает новую версию поднявшейся только после здорового /health (он ходит в базу).
+# start-period — запас на миграции при старте.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||4000)+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 # Миграции применяются при каждом старте: новые накатятся, применённые пропустятся.
-CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy && node dist/index.js"]
+# exec: node заменяет оболочку и сам получает SIGTERM. Без exec сигнал достаётся sh,
+# node его не видит, плавная остановка не срабатывает, и через 10 секунд процесс убивают.
+CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy && exec node dist/index.js"]

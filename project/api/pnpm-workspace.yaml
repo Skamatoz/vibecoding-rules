@@ -6,3 +6,7 @@ allowBuilds:
   prisma: true
   '@prisma/engines': true
   '@prisma/client': true
+
+# Версии пакетов моложе суток не ставим: заражённые выпуски обычно ловят и снимают
+# в первые часы. Значение — в минутах. Не убирать.
+minimumReleaseAge: 1440
